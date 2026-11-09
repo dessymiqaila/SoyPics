@@ -174,6 +174,15 @@ fun HomeScreen(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
         if (treeUri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             scope.launch {
                 val uris = mutableListOf<Uri>()
                 try {
@@ -183,17 +192,34 @@ fun HomeScreen(
                     )
                     context.contentResolver.query(
                         childrenUri,
-                        arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_MIME_TYPE),
+                        arrayOf(
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_MIME_TYPE,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                        ),
                         null,
                         null,
                         null
                     )?.use { cursor ->
                         val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                         val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                        val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                         while (cursor.moveToNext()) {
                             val docId = cursor.getString(idIndex)
                             val mime = cursor.getString(mimeIndex)
-                            if (mime != null && (mime.startsWith("image/") || mime == "application/octet-stream")) {
+                            val name = if (nameIndex != -1) cursor.getString(nameIndex) else null
+                            val isImage = (mime != null && (mime.startsWith("image/") || mime == "application/octet-stream")) ||
+                                (name != null && (
+                                    name.endsWith(".jpg", true) ||
+                                    name.endsWith(".jpeg", true) ||
+                                    name.endsWith(".png", true) ||
+                                    name.endsWith(".webp", true) ||
+                                    name.endsWith(".heic", true) ||
+                                    name.endsWith(".gif", true) ||
+                                    name.endsWith(".bmp", true)
+                                ))
+
+                            if (isImage) {
                                 val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
                                 uris.add(docUri)
                             }

@@ -170,23 +170,38 @@ class VaultRepository(private val context: Context) {
     }
 
     /**
-     * Enqueues batch background packing of files via WorkManager
+     * Enqueues batch background packing of files via WorkManager.
+     * Writes URIs to a local cache file so batches of hundreds/thousands of images
+     * never exceed WorkManager's 10KB Data limit, preventing crashes.
      */
-    fun enqueuePackJob(uris: List<Uri>, password: String, playlistId: Long = -1L): java.util.UUID {
-        val uriStrings = uris.map { it.toString() }.toTypedArray()
-        val request = OneTimeWorkRequestBuilder<ArchivePackWorker>()
-            .setInputData(
-                workDataOf(
-                    ArchivePackWorker.KEY_PASSWORD to password,
-                    ArchivePackWorker.KEY_URI_LIST to uriStrings,
-                    ArchivePackWorker.KEY_PLAYLIST_ID to playlistId
-                )
-            )
-            .addTag(ArchivePackWorker.TAG)
-            .build()
+    fun enqueuePackJob(uris: List<Uri>, password: String, playlistId: Long = -1L): java.util.UUID? {
+        return try {
+            val batchFile = java.io.File(context.cacheDir, "pack_batch_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}.txt")
+            batchFile.bufferedWriter().use { writer ->
+                for (uri in uris) {
+                    writer.write(uri.toString())
+                    writer.newLine()
+                }
+            }
 
-        workManager.enqueue(request)
-        return request.id
+            val request = OneTimeWorkRequestBuilder<ArchivePackWorker>()
+                .setInputData(
+                    workDataOf(
+                        ArchivePackWorker.KEY_PASSWORD to password,
+                        ArchivePackWorker.KEY_BATCH_FILE to batchFile.absolutePath,
+                        ArchivePackWorker.KEY_PLAYLIST_ID to playlistId,
+                        ArchivePackWorker.KEY_TOTAL to uris.size
+                    )
+                )
+                .addTag(ArchivePackWorker.TAG)
+                .build()
+
+            workManager.enqueue(request)
+            request.id
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
     }
 
     fun getWorkInfoById(id: java.util.UUID): Flow<WorkInfo?> =

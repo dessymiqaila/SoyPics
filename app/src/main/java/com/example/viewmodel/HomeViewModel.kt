@@ -192,6 +192,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (uris.isEmpty()) return
 
         val jobId = repository.enqueuePackJob(uris, password, targetPlaylistId)
+        if (jobId == null) {
+            viewModelScope.launch { _userMessage.emit("Failed to enqueue packing job") }
+            return
+        }
+
         _uiState.update {
             it.copy(
                 isPackingActive = true,

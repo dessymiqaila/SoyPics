@@ -46,6 +46,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
     val userMessage = _userMessage.asSharedFlow()
 
     private var currentPassword: String = "soypics2026"
+    private val memoryCache = mutableMapOf<String, Bitmap>()
 
     fun initViewer(
         playlistId: Long,
@@ -55,6 +56,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         password: String
     ) {
         currentPassword = password
+        memoryCache.clear()
         _uiState.update {
             it.copy(
                 isDeletedMode = isDeletedMode,
@@ -87,7 +89,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
                 }
 
                 if (imageList.isNotEmpty()) {
-                    loadBitmapForCurrent(targetIndex, imageList)
+                    onPageChanged(targetIndex)
                 } else {
                     _uiState.update { it.copy(currentBitmap = null) }
                 }
@@ -95,22 +97,35 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun loadBitmapForCurrent(index: Int, list: List<ImageEntity> = _uiState.value.images) {
-        if (index !in list.indices) return
-        val image = list[index]
+    suspend fun loadBitmap(entryName: String): Bitmap? = withContext(Dispatchers.IO) {
+        memoryCache[entryName]?.let { return@withContext it }
+        val bitmap = repository.loadDecryptedBitmap(entryName, currentPassword)
+        if (bitmap != null) {
+            if (memoryCache.size > 40) {
+                memoryCache.keys.firstOrNull()?.let { memoryCache.remove(it) }
+            }
+            memoryCache[entryName] = bitmap
+        }
+        bitmap
+    }
+
+    fun onPageChanged(newIndex: Int) {
+        val list = _uiState.value.images
+        if (newIndex !in list.indices) return
+        val currentImage = list[newIndex]
+
+        _uiState.update { it.copy(currentIndex = newIndex) }
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingBitmap = true, errorMessage = null) }
-            val bitmap = repository.loadDecryptedBitmap(image.entryName, currentPassword)
-            val tags = repository.getTagIdsForImageSync(image.id).toSet()
+            val tags = repository.getTagIdsForImageSync(currentImage.id).toSet()
+            _uiState.update { it.copy(activeTagIds = tags) }
 
-            _uiState.update {
-                it.copy(
-                    currentBitmap = bitmap,
-                    isLoadingBitmap = false,
-                    activeTagIds = tags,
-                    errorMessage = if (bitmap == null) "Decryption failed (incorrect password?)" else null
-                )
+            // Prefetch adjacent images in background for instant zero-delay slide
+            if (newIndex + 1 < list.size) {
+                loadBitmap(list[newIndex + 1].entryName)
+            }
+            if (newIndex - 1 >= 0) {
+                loadBitmap(list[newIndex - 1].entryName)
             }
         }
     }
@@ -118,17 +133,15 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
     fun nextImage() {
         val list = _uiState.value.images
         if (list.isEmpty()) return
-        val nextIdx = (_uiState.value.currentIndex + 1) % list.size
-        _uiState.update { it.copy(currentIndex = nextIdx) }
-        loadBitmapForCurrent(nextIdx)
+        val nextIdx = (_uiState.value.currentIndex + 1).coerceAtMost(list.size - 1)
+        onPageChanged(nextIdx)
     }
 
     fun previousImage() {
         val list = _uiState.value.images
         if (list.isEmpty()) return
-        val prevIdx = if (_uiState.value.currentIndex - 1 < 0) list.size - 1 else _uiState.value.currentIndex - 1
-        _uiState.update { it.copy(currentIndex = prevIdx) }
-        loadBitmapForCurrent(prevIdx)
+        val prevIdx = (_uiState.value.currentIndex - 1).coerceAtLeast(0)
+        onPageChanged(prevIdx)
     }
 
     fun toggleDeleteOrRestore() {

@@ -246,6 +246,112 @@ class ArchiveManager(private val context: Context) {
         )
     }
 
+    data class BatchPackSession(
+        val tempFile: File,
+        val zos: ZipOutputStream,
+        val existingEntryNames: Set<String>
+    )
+
+    /**
+     * Starts a high-performance batch session:
+     * Reads existing archive entries into a local temporary ZIP stream ONCE.
+     * Subsequent images can be appended directly without re-reading the archive each time.
+     */
+    fun startBatchSession(): BatchPackSession {
+        synchronized(lock) {
+            val tempFile = File(context.cacheDir, "gamelog_batch_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(6)}.tmp")
+            val existingNames = mutableSetOf<String>()
+            val zos = ZipOutputStream(FileOutputStream(tempFile).buffered())
+
+            val inStream = openArchiveInputStream()
+            if (inStream != null) {
+                try {
+                    inStream.use { rawIn ->
+                        ZipInputStream(rawIn.buffered()).use { zis ->
+                            var entry = zis.nextEntry
+                            while (entry != null) {
+                                existingNames.add(entry.name)
+                                zos.putNextEntry(ZipEntry(entry.name))
+                                zis.copyTo(zos)
+                                zos.closeEntry()
+                                entry = zis.nextEntry
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            return BatchPackSession(tempFile, zos, existingNames)
+        }
+    }
+
+    /**
+     * Encrypts and streams a single image directly into an active batch session.
+     */
+    fun addImageToBatch(
+        session: BatchPackSession,
+        input: InputStream,
+        originalFileName: String,
+        mimeType: String,
+        password: String
+    ): PackedImageInfo {
+        val rawBytes = input.readBytes()
+        val encryptedBytes = CryptoUtils.encryptBytes(rawBytes, password)
+
+        val id = UUID.randomUUID().toString()
+        val randomTag = UUID.randomUUID().toString().replace("-", "").take(8)
+        val entryName = "img_$randomTag.dat"
+
+        val newEntry = ZipEntry(entryName)
+        session.zos.putNextEntry(newEntry)
+        session.zos.write(encryptedBytes)
+        session.zos.closeEntry()
+
+        return PackedImageInfo(
+            id = id,
+            entryName = entryName,
+            originalFileName = originalFileName,
+            mimeType = mimeType,
+            fileSizeBytes = rawBytes.size.toLong()
+        )
+    }
+
+    /**
+     * Closes the batch ZIP stream and commits the final archive to destination storage ONCE.
+     */
+    fun finishBatchSession(session: BatchPackSession): Boolean {
+        synchronized(lock) {
+            return try {
+                session.zos.flush()
+                session.zos.close()
+
+                openArchiveOutputStream()?.use { os ->
+                    FileInputStream(session.tempFile).buffered().use { it.copyTo(os) }
+                    os.flush()
+                }
+                session.tempFile.delete()
+                true
+            } catch (e: Exception) {
+                e.printStackTrace()
+                session.tempFile.delete()
+                false
+            }
+        }
+    }
+
+    /**
+     * Aborts batch session and cleans up temporary files.
+     */
+    fun abortBatchSession(session: BatchPackSession) {
+        synchronized(lock) {
+            try {
+                session.zos.close()
+            } catch (_: Exception) {}
+            session.tempFile.delete()
+        }
+    }
+
     /**
      * Appends an encrypted entry into the gamelog.logz container.
      * Uses local cache temp file for fast atomic operations.

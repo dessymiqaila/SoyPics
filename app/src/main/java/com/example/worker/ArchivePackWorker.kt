@@ -23,6 +23,7 @@ class ArchivePackWorker(
     companion object {
         const val KEY_PASSWORD = "key_password"
         const val KEY_URI_LIST = "key_uri_list"
+        const val KEY_BATCH_FILE = "key_batch_file"
         const val KEY_PLAYLIST_ID = "key_playlist_id"
         const val KEY_PROGRESS = "key_progress"
         const val KEY_TOTAL = "key_total"
@@ -33,8 +34,30 @@ class ArchivePackWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val password = inputData.getString(KEY_PASSWORD) ?: return@withContext Result.failure()
-        val uriStrings = inputData.getStringArray(KEY_URI_LIST) ?: return@withContext Result.failure()
         val targetPlaylistId = inputData.getLong(KEY_PLAYLIST_ID, -1L)
+
+        // Read URIs either from temporary batch file (bypasses WorkManager 10KB Data limit) or string array
+        val batchFilePath = inputData.getString(KEY_BATCH_FILE)
+        val uriStrings: List<String> = if (!batchFilePath.isNullOrBlank()) {
+            val file = File(batchFilePath)
+            if (file.exists()) {
+                val lines = try {
+                    file.readLines().filter { it.isNotBlank() }
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                try { file.delete() } catch (_: Exception) {}
+                lines
+            } else {
+                inputData.getStringArray(KEY_URI_LIST)?.toList() ?: emptyList()
+            }
+        } else {
+            inputData.getStringArray(KEY_URI_LIST)?.toList() ?: emptyList()
+        }
+
+        if (uriStrings.isEmpty()) {
+            return@withContext Result.success(workDataOf(KEY_SUCCESS_COUNT to 0))
+        }
 
         val context = applicationContext
         val archiveManager = ArchiveManager(context)
@@ -44,78 +67,95 @@ class ArchivePackWorker(
         var successCount = 0
         val total = uriStrings.size
 
-        for ((index, uriString) in uriStrings.withIndex()) {
-            val uri = Uri.parse(uriString)
-            var fileName = "image_${System.currentTimeMillis()}.jpg"
-            var mimeType = "image/jpeg"
+        // Start high-performance batch session (reads existing archive once)
+        val session = archiveManager.startBatchSession()
 
-            try {
-                // Query metadata from content resolver
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        if (nameIndex != -1) {
-                            fileName = cursor.getString(nameIndex) ?: fileName
+        try {
+            for ((index, uriString) in uriStrings.withIndex()) {
+                val uri = Uri.parse(uriString)
+                var fileName = "image_${System.currentTimeMillis()}_$index.jpg"
+                var mimeType = "image/jpeg"
+
+                try {
+                    // Query metadata from content resolver
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (nameIndex != -1) {
+                                val queryName = cursor.getString(nameIndex)
+                                if (!queryName.isNullOrBlank()) {
+                                    fileName = queryName
+                                }
+                            }
                         }
                     }
-                }
-                context.contentResolver.getType(uri)?.let { mimeType = it }
+                    context.contentResolver.getType(uri)?.let { mimeType = it }
 
-                // 1. Pack image into gamelog.logz
-                val inputStream = context.contentResolver.openInputStream(uri)
-                if (inputStream != null) {
-                    val packed = inputStream.use { stream ->
-                        archiveManager.packImage(
-                            input = stream,
-                            originalFileName = fileName,
-                            mimeType = mimeType,
-                            password = password
+                    // 1. Pack image into active batch session (fast streaming AES-256 GCM)
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    if (inputStream != null) {
+                        val packed = inputStream.use { stream ->
+                            archiveManager.addImageToBatch(
+                                session = session,
+                                input = stream,
+                                originalFileName = fileName,
+                                mimeType = mimeType,
+                                password = password
+                            )
+                        }
+
+                        // 2. Insert record into Room Database
+                        val entity = ImageEntity(
+                            id = packed.id,
+                            entryName = packed.entryName,
+                            originalFileName = packed.originalFileName,
+                            mimeType = packed.mimeType,
+                            fileSizeBytes = packed.fileSizeBytes,
+                            dateAdded = System.currentTimeMillis()
                         )
-                    }
+                        dao.insertImage(entity)
 
-                    // 2. Insert into Room Database
-                    val entity = ImageEntity(
-                        id = packed.id,
-                        entryName = packed.entryName,
-                        originalFileName = packed.originalFileName,
-                        mimeType = packed.mimeType,
-                        fileSizeBytes = packed.fileSizeBytes,
-                        dateAdded = System.currentTimeMillis()
-                    )
-                    dao.insertImage(entity)
-
-                    if (targetPlaylistId > 0) {
-                        dao.addTag(ImagePlaylistCrossRef(packed.id, targetPlaylistId))
-                    }
-
-                    // 3. Delete original file upon 100% packing success
-                    try {
-                        if (DocumentsContract.isDocumentUri(context, uri)) {
-                            DocumentsContract.deleteDocument(context.contentResolver, uri)
-                        } else if (uri.scheme == "file") {
-                            uri.path?.let { File(it).delete() }
-                        } else {
-                            // Attempt contentResolver deletion
-                            context.contentResolver.delete(uri, null, null)
+                        if (targetPlaylistId > 0) {
+                            dao.addTag(ImagePlaylistCrossRef(packed.id, targetPlaylistId))
                         }
-                    } catch (deleteEx: Exception) {
-                        // In case OS restricts deletion of foreign tree, log and proceed
-                        deleteEx.printStackTrace()
-                    }
 
-                    successCount++
+                        // 3. Delete original file upon successful packing
+                        try {
+                            if (DocumentsContract.isDocumentUri(context, uri)) {
+                                DocumentsContract.deleteDocument(context.contentResolver, uri)
+                            } else if (uri.scheme == "file") {
+                                uri.path?.let { File(it).delete() }
+                            } else {
+                                context.contentResolver.delete(uri, null, null)
+                            }
+                        } catch (deleteEx: Exception) {
+                            deleteEx.printStackTrace()
+                        }
+
+                        successCount++
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+
+                // Update progress notification
+                try {
+                    setProgress(
+                        workDataOf(
+                            KEY_PROGRESS to (index + 1),
+                            KEY_TOTAL to total,
+                            KEY_CURRENT_NAME to fileName
+                        )
+                    )
+                } catch (_: Exception) {}
             }
 
-            setProgress(
-                workDataOf(
-                    KEY_PROGRESS to (index + 1),
-                    KEY_TOTAL to total,
-                    KEY_CURRENT_NAME to fileName
-                )
-            )
+            // Commit final archive to destination ONCE
+            archiveManager.finishBatchSession(session)
+        } catch (fatal: Exception) {
+            fatal.printStackTrace()
+            archiveManager.abortBatchSession(session)
+            return@withContext Result.failure()
         }
 
         Result.success(workDataOf(KEY_SUCCESS_COUNT to successCount))

@@ -70,6 +70,10 @@ class ArchivePackWorker(
         // Start high-performance batch session (reads existing archive once)
         val session = archiveManager.startBatchSession()
 
+        val pendingEntities = mutableListOf<ImageEntity>()
+        val pendingTags = mutableListOf<ImagePlaylistCrossRef>()
+        val packedUris = mutableListOf<Uri>()
+
         try {
             for ((index, uriString) in uriStrings.withIndex()) {
                 val uri = Uri.parse(uriString)
@@ -104,7 +108,7 @@ class ArchivePackWorker(
                             )
                         }
 
-                        // 2. Insert record into Room Database
+                        // Collect for atomic commit
                         val entity = ImageEntity(
                             id = packed.id,
                             entryName = packed.entryName,
@@ -113,26 +117,13 @@ class ArchivePackWorker(
                             fileSizeBytes = packed.fileSizeBytes,
                             dateAdded = System.currentTimeMillis()
                         )
-                        dao.insertImage(entity)
+                        pendingEntities.add(entity)
 
                         if (targetPlaylistId > 0) {
-                            dao.addTag(ImagePlaylistCrossRef(packed.id, targetPlaylistId))
+                            pendingTags.add(ImagePlaylistCrossRef(packed.id, targetPlaylistId))
                         }
 
-                        // 3. Delete original file upon successful packing
-                        try {
-                            if (DocumentsContract.isDocumentUri(context, uri)) {
-                                DocumentsContract.deleteDocument(context.contentResolver, uri)
-                            } else if (uri.scheme == "file") {
-                                uri.path?.let { File(it).delete() }
-                            } else {
-                                context.contentResolver.delete(uri, null, null)
-                            }
-                        } catch (deleteEx: Exception) {
-                            deleteEx.printStackTrace()
-                        }
-
-                        successCount++
+                        packedUris.add(uri)
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -151,7 +142,33 @@ class ArchivePackWorker(
             }
 
             // Commit final archive to destination ONCE
-            archiveManager.finishBatchSession(session)
+            val committed = archiveManager.finishBatchSession(session)
+            if (committed) {
+                // Insert all records into Room Database only AFTER archive is committed to disk!
+                dao.insertImages(pendingEntities)
+                for (tag in pendingTags) {
+                    try { dao.addTag(tag) } catch (_: Exception) {}
+                }
+
+                // Delete source files now that archive is guaranteed written
+                for (uri in packedUris) {
+                    try {
+                        if (DocumentsContract.isDocumentUri(context, uri)) {
+                            DocumentsContract.deleteDocument(context.contentResolver, uri)
+                        } else if (uri.scheme == "file") {
+                            uri.path?.let { File(it).delete() }
+                        } else {
+                            context.contentResolver.delete(uri, null, null)
+                        }
+                    } catch (deleteEx: Exception) {
+                        deleteEx.printStackTrace()
+                    }
+                }
+                successCount = pendingEntities.size
+            } else {
+                archiveManager.abortBatchSession(session)
+                return@withContext Result.failure()
+            }
         } catch (fatal: Exception) {
             fatal.printStackTrace()
             archiveManager.abortBatchSession(session)

@@ -401,31 +401,51 @@ class ArchiveManager(private val context: Context) {
     }
 
     /**
-     * Reads raw encrypted bytes of an entry from gamelog.logz
+     * Reads raw encrypted bytes of an entry from gamelog.logz with full thread safety.
      */
-    fun readEncryptedEntry(entryName: String): ByteArray? {
-        val inStream = openArchiveInputStream() ?: return null
-        return synchronized(lock) {
-            try {
-                inStream.use { rawIn ->
-                    ZipInputStream(rawIn).use { zis ->
-                        var entry = zis.nextEntry
-                        while (entry != null) {
-                            if (entry.name == entryName) {
-                                val buffer = ByteArrayOutputStream()
-                                zis.copyTo(buffer)
-                                return@synchronized buffer.toByteArray()
-                            }
-                            entry = zis.nextEntry
+    fun readEncryptedEntry(entryName: String): ByteArray? = synchronized(lock) {
+        val inStream = openArchiveInputStream() ?: return@synchronized null
+        try {
+            inStream.use { rawIn ->
+                ZipInputStream(rawIn.buffered()).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        if (entry.name == entryName) {
+                            val buffer = ByteArrayOutputStream()
+                            zis.copyTo(buffer)
+                            return@synchronized buffer.toByteArray()
                         }
+                        entry = zis.nextEntry
                     }
                 }
-                null
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
             }
+            null
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
+    }
+
+    /**
+     * Reads all entry names present in gamelog.logz to detect and clean up orphaned database records.
+     */
+    fun getAllArchiveEntryNames(): Set<String> = synchronized(lock) {
+        val inStream = openArchiveInputStream() ?: return@synchronized emptySet()
+        val names = mutableSetOf<String>()
+        try {
+            inStream.use { rawIn ->
+                ZipInputStream(rawIn.buffered()).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        names.add(entry.name)
+                        entry = zis.nextEntry
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return@synchronized names
     }
 
     /**
@@ -433,7 +453,7 @@ class ArchiveManager(private val context: Context) {
      */
     suspend fun readDecryptedEntryToBitmap(entryName: String, password: String): Bitmap? = withContext(Dispatchers.IO) {
         val encrypted = readEncryptedEntry(entryName) ?: return@withContext null
-        CryptoUtils.decryptToBitmap(encrypted, password)
+        CryptoUtils.decryptToBitmap(encrypted, password, preferences.getVaultPassword())
     }
 
     /**

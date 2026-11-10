@@ -66,6 +66,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             repository.ensureSixPlaylists()
+            try {
+                repository.cleanOrphanedImages()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             refreshStats()
         }
     }

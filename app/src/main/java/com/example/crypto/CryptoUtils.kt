@@ -130,16 +130,72 @@ object CryptoUtils {
     }
 
     /**
-     * Decrypts encrypted bytes directly into an in-memory Android Bitmap without
-     * writing plaintext to disk cache.
+     * Decrypts encrypted bytes directly into an in-memory Android Bitmap.
+     * Includes dual-pass decoding with inSampleSize and RGB_565 to prevent OutOfMemoryError
+     * on large camera photos, and supports fallback password for seed/legacy entries.
      */
-    fun decryptToBitmap(encryptedBytes: ByteArray, password: String): Bitmap? {
+    fun decryptToBitmap(
+        encryptedBytes: ByteArray,
+        password: String,
+        fallbackPassword: String? = "soypics2026"
+    ): Bitmap? {
+        val decryptedBytes = try {
+            decryptBytes(encryptedBytes, password)
+        } catch (e1: Exception) {
+            if (!fallbackPassword.isNullOrBlank() && fallbackPassword != password) {
+                try {
+                    decryptBytes(encryptedBytes, fallbackPassword)
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        } ?: return null
+
+        return decodeSampledBitmap(decryptedBytes, maxDimension = 2560)
+    }
+
+    /**
+     * Decodes byte array into a memory-efficient Bitmap, calculating appropriate inSampleSize
+     * to safely handle 48MP/108MP phone camera photos without Dalvik/ART OutOfMemory errors.
+     */
+    fun decodeSampledBitmap(data: ByteArray, maxDimension: Int = 2560): Bitmap? {
+        val boundsOptions = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeByteArray(data, 0, data.size, boundsOptions)
+
+        val outWidth = boundsOptions.outWidth
+        val outHeight = boundsOptions.outHeight
+        if (outWidth <= 0 || outHeight <= 0) {
+            return null
+        }
+
+        var sampleSize = 1
+        var halfW = outWidth
+        var halfH = outHeight
+        while (halfW > maxDimension || halfH > maxDimension) {
+            sampleSize *= 2
+            halfW /= 2
+            halfH /= 2
+        }
+
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+
         return try {
-            val decryptedBytes = decryptBytes(encryptedBytes, password)
-            BitmapFactory.decodeByteArray(decryptedBytes, 0, decryptedBytes.size)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+            BitmapFactory.decodeByteArray(data, 0, data.size, decodeOptions)
+        } catch (_: Throwable) {
+            // Secondary fallback if device is under heavy memory pressure
+            decodeOptions.inSampleSize = sampleSize * 2
+            try {
+                BitmapFactory.decodeByteArray(data, 0, data.size, decodeOptions)
+            } catch (_: Throwable) {
+                null
+            }
         }
     }
 

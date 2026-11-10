@@ -40,6 +40,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RestoreFromTrash
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -304,7 +306,8 @@ fun ImageViewerScreen(
                         val image = uiState.images[targetIdx]
                         ViewerImageDisplay(
                             image = image,
-                            loadBitmap = { viewModel.loadBitmap(image.entryName) }
+                            loadBitmap = { viewModel.loadBitmap(image.entryName) },
+                            onRemoveBroken = { viewModel.removeBrokenImage(image.id) }
                         )
                     }
                 }
@@ -621,7 +624,8 @@ fun TikTokPlaylistOverlay(
 @Composable
 private fun ViewerImageDisplay(
     image: ImageEntity,
-    loadBitmap: suspend () -> Bitmap?
+    loadBitmap: suspend () -> Bitmap?,
+    onRemoveBroken: () -> Unit
 ) {
     var bitmap by remember(image.id) { mutableStateOf<Bitmap?>(null) }
     var isLoading by remember(image.id) { mutableStateOf(true) }
@@ -675,17 +679,35 @@ private fun ViewerImageDisplay(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Decryption Failed",
+                    text = "Image Unavailable",
                     color = CrimsonTrash,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Ensure the vault encryption password is correct.",
+                    text = "File missing from archive (aborted import) or memory decode failed.",
                     color = MutedSlate,
                     fontSize = 12.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
+                Spacer(modifier = Modifier.height(14.dp))
+                OutlinedButton(
+                    onClick = onRemoveBroken,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteForever,
+                        contentDescription = null,
+                        tint = CrimsonTrash,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Remove Broken Entry",
+                        color = CrimsonTrash,
+                        fontSize = 12.sp
+                    )
+                }
             }
         }
     }

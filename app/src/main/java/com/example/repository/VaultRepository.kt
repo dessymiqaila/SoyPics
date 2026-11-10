@@ -160,6 +160,31 @@ class VaultRepository(private val context: Context) {
         return archiveManager.readDecryptedEntryToBitmap(entryName, password)
     }
 
+    suspend fun hardDeleteImage(id: String) = withContext(Dispatchers.IO) {
+        dao.hardDeleteImage(id)
+    }
+
+    /**
+     * Reconciles Room Database against the physical gamelog.logz archive.
+     * Deletes any phantom database records for images that do not exist inside the archive
+     * (e.g. from an earlier interrupted batch import before commit completed).
+     */
+    suspend fun cleanOrphanedImages(): Int = withContext(Dispatchers.IO) {
+        val archiveEntries = archiveManager.getAllArchiveEntryNames()
+        if (archiveEntries.isEmpty()) {
+            return@withContext 0
+        }
+        val allImages = dao.getAllImagesRawSync()
+        var cleaned = 0
+        for (img in allImages) {
+            if (!archiveEntries.contains(img.entryName)) {
+                dao.hardDeleteImage(img.id)
+                cleaned++
+            }
+        }
+        cleaned
+    }
+
     suspend fun exportImageToDownloads(
         entryName: String,
         originalFileName: String,

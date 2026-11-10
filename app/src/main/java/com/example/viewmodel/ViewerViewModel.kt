@@ -85,6 +85,12 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
+            try {
+                repository.cleanOrphanedImages()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             val flow = when {
                 isDeletedMode -> repository.deletedImages
                 playlistId > 0 -> repository.getImagesForPlaylist(playlistId)
@@ -131,7 +137,8 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun loadBitmap(entryName: String): Bitmap? = withContext(Dispatchers.IO) {
         memoryCache[entryName]?.let { return@withContext it }
-        val bitmap = repository.loadDecryptedBitmap(entryName, currentPassword)
+        val effectivePassword = currentPassword.ifBlank { repository.getVaultPassword() }
+        val bitmap = repository.loadDecryptedBitmap(entryName, effectivePassword)
         if (bitmap != null) {
             if (memoryCache.size > 50) {
                 memoryCache.keys.firstOrNull()?.let { memoryCache.remove(it) }
@@ -139,6 +146,13 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
             memoryCache[entryName] = bitmap
         }
         bitmap
+    }
+
+    fun removeBrokenImage(imageId: String) {
+        viewModelScope.launch {
+            repository.hardDeleteImage(imageId)
+            _userMessage.emit("Removed invalid image entry")
+        }
     }
 
     fun onPageChanged(newIndex: Int) {

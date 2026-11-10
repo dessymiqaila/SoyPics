@@ -43,6 +43,9 @@ interface SoyPicsDao {
     @Query("SELECT * FROM images WHERE isDeleted = 1")
     suspend fun getDeletedImagesList(): List<ImageEntity>
 
+    @Query("SELECT * FROM images")
+    suspend fun getAllImagesRawSync(): List<ImageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImage(image: ImageEntity)
 

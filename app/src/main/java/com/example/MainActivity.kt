@@ -12,8 +12,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.archive.ArchivePreferences
 import com.example.ui.HomeScreen
 import com.example.ui.ImageViewerScreen
 import com.example.ui.theme.SoyPicsTheme
@@ -34,15 +36,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            SoyPicsTheme {
-                SoyPicsApp()
+            val context = LocalContext.current
+            val prefs = remember { ArchivePreferences(context) }
+            var currentTheme by remember { mutableStateOf(prefs.getThemeMode()) }
+
+            SoyPicsTheme(themeMode = currentTheme) {
+                SoyPicsApp(
+                    onThemeChanged = { newTheme ->
+                        currentTheme = newTheme
+                        prefs.setThemeMode(newTheme)
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-fun SoyPicsApp() {
+fun SoyPicsApp(
+    onThemeChanged: (String) -> Unit = {}
+) {
     val homeViewModel: HomeViewModel = viewModel()
     val viewerViewModel: ViewerViewModel = viewModel()
 
@@ -55,6 +68,7 @@ fun SoyPicsApp() {
             is AppDestination.Home -> {
                 HomeScreen(
                     viewModel = homeViewModel,
+                    onThemeChanged = onThemeChanged,
                     onNavigateToViewer = { playlistId, playlistName, isDeleted ->
                         currentScreen = AppDestination.Viewer(playlistId, playlistName, isDeleted)
                     }
@@ -67,6 +81,7 @@ fun SoyPicsApp() {
                     playlistName = destination.playlistName,
                     isDeletedMode = destination.isDeleted,
                     vaultPassword = homeUiState.passwordInput,
+                    onThemeChanged = onThemeChanged,
                     onBack = {
                         currentScreen = AppDestination.Home
                         homeViewModel.refreshStats()

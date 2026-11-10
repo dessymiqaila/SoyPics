@@ -2,9 +2,9 @@ package com.example.viewmodel
 
 import android.app.Application
 import android.graphics.Bitmap
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.archive.ArchivePreferences
 import com.example.data.ImageEntity
 import com.example.data.PlaylistEntity
 import com.example.repository.VaultRepository
@@ -23,6 +23,10 @@ import kotlinx.coroutines.withContext
 data class ViewerUiState(
     val images: List<ImageEntity> = emptyList(),
     val currentIndex: Int = 0,
+    val isNext: Boolean = true,
+    val slideOrientation: String = "VERTICAL", // "VERTICAL" or "HORIZONTAL"
+    val smoothnessMs: Int = 400,
+    val isShuffleEnabled: Boolean = true,
     val currentBitmap: Bitmap? = null,
     val isLoadingBitmap: Boolean = false,
     val isDeletedMode: Boolean = false,
@@ -35,8 +39,15 @@ data class ViewerUiState(
 class ViewerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = VaultRepository(application)
+    private val prefs = ArchivePreferences(application)
 
-    private val _uiState = MutableStateFlow(ViewerUiState())
+    private val _uiState = MutableStateFlow(
+        ViewerUiState(
+            slideOrientation = prefs.getSlideOrientation(),
+            smoothnessMs = prefs.getSmoothnessMs(),
+            isShuffleEnabled = prefs.isShuffleEnabled()
+        )
+    )
     val uiState: StateFlow<ViewerUiState> = _uiState.asStateFlow()
 
     val allPlaylists: StateFlow<List<PlaylistEntity>> = repository.allPlaylists
@@ -57,11 +68,19 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         currentPassword = password
         memoryCache.clear()
+
+        val shuffle = prefs.isShuffleEnabled()
+        val orientation = prefs.getSlideOrientation()
+        val smoothness = prefs.getSmoothnessMs()
+
         _uiState.update {
             it.copy(
                 isDeletedMode = isDeletedMode,
                 activePlaylistId = playlistId,
-                activePlaylistName = playlistName
+                activePlaylistName = playlistName,
+                isShuffleEnabled = shuffle,
+                slideOrientation = orientation,
+                smoothnessMs = smoothness
             )
         }
 
@@ -72,23 +91,36 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
                 else -> repository.activeImages
             }
 
-            flow.collect { imageList ->
+            flow.collect { rawList ->
+                // Apply randomized order if shuffle is enabled (default TRUE per user request)
+                val processedList = if (shuffle) {
+                    if (initialImageId != null) {
+                        val selected = rawList.find { it.id == initialImageId }
+                        val others = rawList.filterNot { it.id == initialImageId }.shuffled()
+                        if (selected != null) listOf(selected) + others else rawList.shuffled()
+                    } else {
+                        rawList.shuffled()
+                    }
+                } else {
+                    rawList
+                }
+
                 val targetIndex = if (initialImageId != null) {
-                    val found = imageList.indexOfFirst { it.id == initialImageId }
+                    val found = processedList.indexOfFirst { it.id == initialImageId }
                     if (found >= 0) found else 0
                 } else {
                     val curr = _uiState.value.currentIndex
-                    if (curr in imageList.indices) curr else 0
+                    if (curr in processedList.indices) curr else 0
                 }
 
                 _uiState.update {
                     it.copy(
-                        images = imageList,
+                        images = processedList,
                         currentIndex = targetIndex
                     )
                 }
 
-                if (imageList.isNotEmpty()) {
+                if (processedList.isNotEmpty()) {
                     onPageChanged(targetIndex)
                 } else {
                     _uiState.update { it.copy(currentBitmap = null) }
@@ -101,7 +133,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         memoryCache[entryName]?.let { return@withContext it }
         val bitmap = repository.loadDecryptedBitmap(entryName, currentPassword)
         if (bitmap != null) {
-            if (memoryCache.size > 40) {
+            if (memoryCache.size > 50) {
                 memoryCache.keys.firstOrNull()?.let { memoryCache.remove(it) }
             }
             memoryCache[entryName] = bitmap
@@ -120,28 +152,64 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
             val tags = repository.getTagIdsForImageSync(currentImage.id).toSet()
             _uiState.update { it.copy(activeTagIds = tags) }
 
-            // Prefetch adjacent images in background for instant zero-delay slide
-            if (newIndex + 1 < list.size) {
-                loadBitmap(list[newIndex + 1].entryName)
-            }
-            if (newIndex - 1 >= 0) {
-                loadBitmap(list[newIndex - 1].entryName)
+            // Prefetch adjacent images (circular wrap) in background for instant zero-delay slide
+            if (list.size > 1) {
+                val nextIdx = (newIndex + 1) % list.size
+                val prevIdx = if (newIndex - 1 < 0) list.size - 1 else newIndex - 1
+                loadBitmap(list[nextIdx].entryName)
+                loadBitmap(list[prevIdx].entryName)
             }
         }
     }
 
-    fun nextImage() {
+    fun goToNext() {
         val list = _uiState.value.images
         if (list.isEmpty()) return
-        val nextIdx = (_uiState.value.currentIndex + 1).coerceAtMost(list.size - 1)
+        val nextIdx = (_uiState.value.currentIndex + 1) % list.size
+        _uiState.update { it.copy(isNext = true) }
         onPageChanged(nextIdx)
     }
 
-    fun previousImage() {
+    fun goToPrev() {
         val list = _uiState.value.images
         if (list.isEmpty()) return
-        val prevIdx = (_uiState.value.currentIndex - 1).coerceAtLeast(0)
+        val prevIdx = if (_uiState.value.currentIndex - 1 < 0) list.size - 1 else _uiState.value.currentIndex - 1
+        _uiState.update { it.copy(isNext = false) }
         onPageChanged(prevIdx)
+    }
+
+    fun reshuffle() {
+        val list = _uiState.value.images
+        if (list.size <= 1) return
+        val shuffled = list.shuffled()
+        memoryCache.clear()
+        _uiState.update {
+            it.copy(
+                images = shuffled,
+                currentIndex = 0,
+                isNext = true
+            )
+        }
+        onPageChanged(0)
+        viewModelScope.launch {
+            _userMessage.emit("Reshuffled ${shuffled.size} images in random order")
+        }
+    }
+
+    fun updateSettings(slideOrientation: String, smoothnessMs: Int, shuffle: Boolean) {
+        prefs.setSlideOrientation(slideOrientation)
+        prefs.setSmoothnessMs(smoothnessMs)
+        prefs.setShuffleEnabled(shuffle)
+        _uiState.update {
+            it.copy(
+                slideOrientation = slideOrientation,
+                smoothnessMs = smoothnessMs,
+                isShuffleEnabled = shuffle
+            )
+        }
+        if (shuffle) {
+            reshuffle()
+        }
     }
 
     fun toggleDeleteOrRestore() {

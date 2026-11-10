@@ -2,7 +2,6 @@ package com.example.archive
 
 import android.content.Context
 import android.content.SharedPreferences
-import java.io.File
 
 class ArchivePreferences(private val context: Context) {
 
@@ -15,6 +14,10 @@ class ArchivePreferences(private val context: Context) {
         private const val KEY_ARCHIVE_DISPLAY_PATH = "key_archive_display_path"
         private const val KEY_VAULT_PASSWORD = "key_vault_password"
         private const val KEY_FIRST_SETUP = "key_first_setup_completed"
+        private const val KEY_THEME_MODE = "key_theme_mode" // "DARK", "LIGHT", "SYSTEM"
+        private const val KEY_SLIDE_ORIENTATION = "key_slide_orientation" // "VERTICAL", "HORIZONTAL"
+        private const val KEY_SMOOTHNESS_MS = "key_smoothness_ms" // 200..800
+        private const val KEY_SHUFFLE_ORDER = "key_shuffle_order" // boolean (default true)
         const val DEFAULT_PASSWORD = "soypics2026"
     }
 
@@ -72,6 +75,39 @@ class ArchivePreferences(private val context: Context) {
 
     fun setFirstSetupCompleted(completed: Boolean) {
         prefs.edit().putBoolean(KEY_FIRST_SETUP, completed).apply()
+    }
+
+    fun getThemeMode(): String {
+        return prefs.getString(KEY_THEME_MODE, "DARK") ?: "DARK"
+    }
+
+    fun setThemeMode(mode: String) {
+        prefs.edit().putString(KEY_THEME_MODE, mode).apply()
+    }
+
+    fun getSlideOrientation(): String {
+        return prefs.getString(KEY_SLIDE_ORIENTATION, "VERTICAL") ?: "VERTICAL"
+    }
+
+    fun setSlideOrientation(orientation: String) {
+        prefs.edit().putString(KEY_SLIDE_ORIENTATION, orientation).apply()
+    }
+
+    fun getSmoothnessMs(): Int {
+        return prefs.getInt(KEY_SMOOTHNESS_MS, 400)
+    }
+
+    fun setSmoothnessMs(ms: Int) {
+        prefs.edit().putInt(KEY_SMOOTHNESS_MS, ms).apply()
+    }
+
+    fun isShuffleEnabled(): Boolean {
+        // Default to TRUE per user request for fully randomized viewer
+        return prefs.getBoolean(KEY_SHUFFLE_ORDER, true)
+    }
+
+    fun setShuffleEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SHUFFLE_ORDER, enabled).apply()
     }
 
     fun clearAllData() {

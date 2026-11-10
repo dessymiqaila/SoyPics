@@ -9,15 +9,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -26,7 +27,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,8 +35,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.pager.VerticalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,14 +43,14 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -60,16 +58,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
-import com.example.data.ImageEntity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -81,23 +76,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.roundToInt
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.archive.ArchivePreferences
+import com.example.data.ImageEntity
 import com.example.data.PlaylistEntity
 import com.example.ui.theme.ChromeWhite
 import com.example.ui.theme.CrimsonTrash
 import com.example.ui.theme.EmeraldSuccess
-import com.example.ui.theme.GunmetalElevated
-import com.example.ui.theme.GunmetalSurface
 import com.example.ui.theme.MutedSlate
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.SteelBlueAccent
-import com.example.ui.theme.TitaniumBorder
 import com.example.viewmodel.ViewerViewModel
 import kotlinx.coroutines.flow.collectLatest
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable
 fun ImageViewerScreen(
@@ -107,14 +102,18 @@ fun ImageViewerScreen(
     isDeletedMode: Boolean,
     initialImageId: String? = null,
     vaultPassword: String,
+    onThemeChanged: (String) -> Unit = {},
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val prefs = remember { ArchivePreferences(context) }
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val allPlaylists by viewModel.allPlaylists.collectAsStateWithLifecycle()
+
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     BackHandler {
         onBack()
@@ -195,97 +194,131 @@ fun ImageViewerScreen(
                 }
             }
         } else {
-            val pagerState = rememberPagerState(
-                initialPage = uiState.currentIndex.coerceIn(0, (uiState.images.size - 1).coerceAtLeast(0)),
-                pageCount = { uiState.images.size }
-            )
-            val pagerScope = rememberCoroutineScope()
-
-            // Synchronize active page changes with ViewModel
-            LaunchedEffect(pagerState.currentPage) {
-                viewModel.onPageChanged(pagerState.currentPage)
-            }
-
-            // Synchronize programmatic index updates
-            LaunchedEffect(uiState.currentIndex) {
-                if (pagerState.currentPage != uiState.currentIndex && uiState.currentIndex in uiState.images.indices) {
-                    pagerState.scrollToPage(uiState.currentIndex)
-                }
-            }
-
-            // Native VerticalPager: 100% continuous finger-tracking vertical slide without bounce or lag (TikTok style)
-            // Geser atas untuk gambar berikutnya (next), geser bawah untuk gambar sebelumnya (prev)
-            VerticalPager(
-                state = pagerState,
-                beyondViewportPageCount = 1,
+            // Main Photo Area with Custom Gestures & Configurable Smooth Slide
+            // Gestures per user request:
+            // 1. Sentuh di mana aja kecuali ikon atas & playlist -> NEXT img
+            // 2. Geser ke atas = PREV
+            // 3. Geser ke bawah = NEXT
+            // 4. Geser ke kiri = PREV
+            // 5. Geser ke kanan = NEXT
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(uiState.images.size) {
-                        var accumulatedX = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { accumulatedX = 0f },
-                            onHorizontalDrag = { change, dragAmount ->
-                                change.consume()
-                                accumulatedX += dragAmount
-                            },
-                            onDragEnd = {
-                                if (accumulatedX < -100f) {
-                                    // Swipe Left -> Next Image
-                                    if (pagerState.currentPage < uiState.images.size - 1) {
-                                        pagerScope.launch {
-                                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val startPos = down.position
+                            var totalX = 0f
+                            var totalY = 0f
+                            var hasMoved = false
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (change.isConsumed) break
+
+                                if (!change.pressed) {
+                                    // Pointer released (Up event)
+                                    val minSwipe = 35f
+                                    val absX = abs(totalX)
+                                    val absY = abs(totalY)
+
+                                    if (hasMoved && (absX > minSwipe || absY > minSwipe)) {
+                                        change.consume()
+                                        if (absY >= absX) {
+                                            // Vertical Swipe
+                                            if (totalY < -minSwipe) {
+                                                // Geser ke ATAS = PREV
+                                                viewModel.goToPrev()
+                                            } else {
+                                                // Geser ke BAWAH = NEXT
+                                                viewModel.goToNext()
+                                            }
+                                        } else {
+                                            // Horizontal Swipe
+                                            if (totalX < -minSwipe) {
+                                                // Geser ke KIRI = PREV
+                                                viewModel.goToPrev()
+                                            } else {
+                                                // Geser ke KANAN = NEXT
+                                                viewModel.goToNext()
+                                            }
                                         }
+                                    } else {
+                                        // Tap anywhere (outside top icons & playlist) -> NEXT
+                                        change.consume()
+                                        viewModel.goToNext()
                                     }
-                                } else if (accumulatedX > 100f) {
-                                    // Swipe Right -> Previous Image
-                                    if (pagerState.currentPage > 0) {
-                                        pagerScope.launch {
-                                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                                        }
-                                    }
-                                }
-                                accumulatedX = 0f
-                            },
-                            onDragCancel = { accumulatedX = 0f }
-                        )
-                    }
-                    .pointerInput(uiState.images.size) {
-                        detectTapGestures(
-                            onTap = { offset ->
-                                val isTopOrLeft = offset.y < size.height * 0.35f || offset.x < size.width * 0.25f
-                                if (isTopOrLeft) {
-                                    if (pagerState.currentPage > 0) {
-                                        pagerScope.launch {
-                                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                                        }
-                                    }
+                                    break
                                 } else {
-                                    if (pagerState.currentPage < uiState.images.size - 1) {
-                                        pagerScope.launch {
-                                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                                        }
+                                    val delta = change.position - startPos
+                                    totalX = delta.x
+                                    totalY = delta.y
+                                    if (abs(totalX) > 12f || abs(totalY) > 12f) {
+                                        hasMoved = true
                                     }
                                 }
                             }
+                        }
+                    }
+            ) {
+                val currentIndex = uiState.currentIndex
+                val isNext = uiState.isNext
+                val isVertical = uiState.slideOrientation == "VERTICAL"
+                val smoothness = uiState.smoothnessMs
+
+                // AnimatedContent with configurable duration & zero-bounce FastOutSlowInEasing
+                AnimatedContent(
+                    targetState = currentIndex,
+                    transitionSpec = {
+                        val duration = smoothness.coerceIn(150, 1000)
+                        val spec = tween<IntOffset>(durationMillis = duration, easing = FastOutSlowInEasing)
+                        val fadeSpec = tween<Float>(durationMillis = duration / 2)
+
+                        if (isVertical) {
+                            if (isNext) {
+                                // Next: enters from bottom, exits to top
+                                (slideInVertically(animationSpec = spec) { it } + fadeIn(fadeSpec))
+                                    .togetherWith(slideOutVertically(animationSpec = spec) { -it } + fadeOut(fadeSpec))
+                            } else {
+                                // Prev: enters from top, exits to bottom
+                                (slideInVertically(animationSpec = spec) { -it } + fadeIn(fadeSpec))
+                                    .togetherWith(slideOutVertically(animationSpec = spec) { it } + fadeOut(fadeSpec))
+                            }
+                        } else {
+                            if (isNext) {
+                                // Next: enters from right, exits to left
+                                (slideInHorizontally(animationSpec = spec) { it } + fadeIn(fadeSpec))
+                                    .togetherWith(slideOutHorizontally(animationSpec = spec) { -it } + fadeOut(fadeSpec))
+                            } else {
+                                // Prev: enters from left, exits to right
+                                (slideInHorizontally(animationSpec = spec) { -it } + fadeIn(fadeSpec))
+                                    .togetherWith(slideOutHorizontally(animationSpec = spec) { it } + fadeOut(fadeSpec))
+                            }
+                        }
+                    },
+                    label = "image_slide_transition",
+                    modifier = Modifier.fillMaxSize()
+                ) { targetIdx ->
+                    if (targetIdx in uiState.images.indices) {
+                        val image = uiState.images[targetIdx]
+                        ViewerImageDisplay(
+                            image = image,
+                            loadBitmap = { viewModel.loadBitmap(image.entryName) }
                         )
                     }
-            ) { page ->
-                val image = uiState.images[page]
-                ViewerPageItem(
-                    image = image,
-                    loadBitmap = { viewModel.loadBitmap(image.entryName) }
-                )
+                }
             }
         }
 
-        // Top Floating Action Bar (Overlay)
-        TopFloatingActionBar(
-            title = uiState.activePlaylistName,
+        // Top Floating Action Icons (NO background block! Pure floating translucent icons with touch feedback)
+        TopFloatingOverlayIcons(
             currentIndex = if (uiState.images.isNotEmpty()) uiState.currentIndex + 1 else 0,
             totalCount = uiState.images.size,
             isDeletedMode = uiState.isDeletedMode,
             hasImages = uiState.images.isNotEmpty(),
             onBack = onBack,
+            onOpenSettings = { showSettingsDialog = true },
             onDeleteOrRestore = { viewModel.toggleDeleteOrRestore() },
             onDownload = { viewModel.exportActiveImage() }
         )
@@ -306,6 +339,45 @@ fun ImageViewerScreen(
             )
         }
 
+        // Settings Dialog Modal
+        if (showSettingsDialog) {
+            SettingsDialog(
+                currentTheme = prefs.getThemeMode(),
+                currentSlideOrientation = uiState.slideOrientation,
+                currentSmoothnessMs = uiState.smoothnessMs,
+                currentShuffleEnabled = uiState.isShuffleEnabled,
+                onThemeChanged = { newTheme ->
+                    prefs.setThemeMode(newTheme)
+                    onThemeChanged(newTheme)
+                },
+                onSlideOrientationChanged = { newOrientation ->
+                    viewModel.updateSettings(
+                        slideOrientation = newOrientation,
+                        smoothnessMs = uiState.smoothnessMs,
+                        shuffle = uiState.isShuffleEnabled
+                    )
+                },
+                onSmoothnessChanged = { newMs ->
+                    viewModel.updateSettings(
+                        slideOrientation = uiState.slideOrientation,
+                        smoothnessMs = newMs,
+                        shuffle = uiState.isShuffleEnabled
+                    )
+                },
+                onShuffleChanged = { newShuffle ->
+                    viewModel.updateSettings(
+                        slideOrientation = uiState.slideOrientation,
+                        smoothnessMs = uiState.smoothnessMs,
+                        shuffle = newShuffle
+                    )
+                },
+                onReshuffleNow = {
+                    viewModel.reshuffle()
+                },
+                onDismiss = { showSettingsDialog = false }
+            )
+        }
+
         // Snackbar host for download / delete confirmation
         SnackbarHost(
             hostState = snackbarHostState,
@@ -316,108 +388,141 @@ fun ImageViewerScreen(
     }
 }
 
+/**
+ * Top Floating Overlay Icons:
+ * Completely removes any rectangular bar or block from the top of the photo.
+ * Only leaves standalone, semi-transparent circular buttons with touch feedback (Material ripple),
+ * styled identically to the playlist pills for a seamless aesthetic.
+ */
 @Composable
-fun TopFloatingActionBar(
-    title: String,
+fun TopFloatingOverlayIcons(
     currentIndex: Int,
     totalCount: Int,
     isDeletedMode: Boolean,
     hasImages: Boolean,
     onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
     onDeleteOrRestore: () -> Unit,
     onDownload: () -> Unit
 ) {
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(12.dp, RoundedCornerShape(24.dp)),
-            shape = RoundedCornerShape(24.dp),
-            color = GunmetalSurface.copy(alpha = 0.88f),
-            border = androidx.compose.foundation.BorderStroke(1.dp, TitaniumBorder.copy(alpha = 0.8f))
-        ) {
-            Row(
+        // Left: Floating Back Button
+        FloatingTranslucentIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back",
+            tint = ChromeWhite,
+            testTag = "viewer_back_button",
+            onClick = onBack
+        )
+
+        // Middle: Floating Index Badge Capsule
+        if (totalCount > 0) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .border(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = 0.22f),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
             ) {
-                // Back Button
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.testTag("viewer_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back to Home",
-                        tint = ChromeWhite
-                    )
-                }
+                Text(
+                    text = "$currentIndex / $totalCount",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    ),
+                    color = ChromeWhite
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.width(1.dp))
+        }
 
-                // Middle Info: Title and index count
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                        color = ChromeWhite,
-                        maxLines = 1
-                    )
-                    if (totalCount > 0) {
-                        Text(
-                            text = "$currentIndex / $totalCount",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp
-                            ),
-                            color = SteelBlueAccent
-                        )
-                    }
-                }
+        // Right: Floating Action Buttons (Settings, Download, Delete/Restore)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Settings Button
+            FloatingTranslucentIconButton(
+                icon = Icons.Default.Settings,
+                contentDescription = "Viewer Settings",
+                tint = SteelBlueAccent,
+                testTag = "viewer_settings_button",
+                onClick = onOpenSettings
+            )
 
-                // Actions: Delete/Restore & Download
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (hasImages) {
-                        // Delete or Restore Button
-                        IconButton(
-                            onClick = onDeleteOrRestore,
-                            modifier = Modifier.testTag("viewer_delete_restore_button")
-                        ) {
-                            if (isDeletedMode) {
-                                Icon(
-                                    imageVector = Icons.Default.RestoreFromTrash,
-                                    contentDescription = "Restore Image",
-                                    tint = EmeraldSuccess
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete Image",
-                                    tint = CrimsonTrash
-                                )
-                            }
-                        }
+            if (hasImages) {
+                // Download Button
+                FloatingTranslucentIconButton(
+                    icon = Icons.Default.Download,
+                    contentDescription = "Download Image",
+                    tint = SteelBlueAccent,
+                    testTag = "viewer_download_button",
+                    onClick = onDownload
+                )
 
-                        // Download to Public Downloads Button
-                        IconButton(
-                            onClick = onDownload,
-                            modifier = Modifier.testTag("viewer_download_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = "Download to Storage",
-                                tint = SteelBlueAccent
-                            )
-                        }
-                    }
-                }
+                // Delete / Restore Button
+                FloatingTranslucentIconButton(
+                    icon = if (isDeletedMode) Icons.Default.RestoreFromTrash else Icons.Default.Delete,
+                    contentDescription = if (isDeletedMode) "Restore Image" else "Delete Image",
+                    tint = if (isDeletedMode) EmeraldSuccess else CrimsonTrash,
+                    testTag = "viewer_delete_restore_button",
+                    onClick = onDeleteOrRestore
+                )
             }
         }
+    }
+}
+
+/**
+ * Translucent circular icon button with touch ripple effect,
+ * visually harmonized with the TikTok-style playlist numbers.
+ */
+@Composable
+fun FloatingTranslucentIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f))
+            .border(
+                width = 1.dp,
+                color = Color.White.copy(alpha = 0.22f),
+                shape = CircleShape
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = true, color = ChromeWhite),
+                onClick = onClick
+            )
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -464,15 +569,13 @@ fun TikTokPlaylistOverlay(
             }
 
             // Sleek round number button (1, 2, 3, 4, 5, 6)
-            // NO outer box, NO rectangular shadow. Pure floating round circle!
-            // Inactive: highly transparent (alpha = 0.15f) with faint border so it blends into the photo
-            // Active: vivid solid playlist color with sharp border
+            // Pure floating round circle with touch ripple effect
             Box(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
                     .background(
-                        if (isTagged) playlistColor else Color.Black.copy(alpha = 0.15f)
+                        if (isTagged) playlistColor else Color.Black.copy(alpha = 0.18f)
                     )
                     .border(
                         width = if (isTagged) 2.dp else 1.dp,
@@ -481,7 +584,7 @@ fun TikTokPlaylistOverlay(
                     )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
+                        indication = ripple(bounded = true, color = ChromeWhite)
                     ) {
                         onToggleTag(playlist.id)
                     }
@@ -495,7 +598,7 @@ fun TikTokPlaylistOverlay(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 15.sp
                     ),
-                    color = if (isTagged) ChromeWhite else ChromeWhite.copy(alpha = 0.35f)
+                    color = if (isTagged) ChromeWhite else ChromeWhite.copy(alpha = 0.4f)
                 )
             }
         }
@@ -512,12 +615,11 @@ fun TikTokPlaylistOverlay(
 }
 
 /**
- * Individual page item for VerticalPager:
- * Loads, caches, and renders its own decrypted bitmap independently
- * for zero-latency, lag-free smooth sliding without flickering or bounce.
+ * Loads, caches, and renders its decrypted bitmap
+ * for instant zero-latency slide without flickering or bounce.
  */
 @Composable
-private fun ViewerPageItem(
+private fun ViewerImageDisplay(
     image: ImageEntity,
     loadBitmap: suspend () -> Bitmap?
 ) {

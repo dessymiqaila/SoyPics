@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -91,6 +92,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.archive.ArchivePreferences
 import com.example.data.PlaylistWithCount
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.ChromeWhite
@@ -111,11 +113,15 @@ import java.io.File
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
+    onThemeChanged: (String) -> Unit = {},
     onNavigateToViewer: (playlistId: Long, playlistName: String, isDeleted: Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val prefs = remember { ArchivePreferences(context) }
+
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
@@ -251,7 +257,7 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .testTag("home_screen"),
-        containerColor = ObsidianBlack,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -322,6 +328,18 @@ fun HomeScreen(
                         )
                     }
 
+                    // Settings & Preferences button
+                    IconButton(
+                        onClick = { showSettingsDialog = true },
+                        modifier = Modifier.testTag("home_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Preferences & Settings",
+                            tint = SteelBlueAccent
+                        )
+                    }
+
                     // Exit application button with confirmation
                     IconButton(
                         onClick = { showExitConfirmDialog = true },
@@ -335,7 +353,7 @@ fun HomeScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = ObsidianBlack
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         },
@@ -346,7 +364,7 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .background(ObsidianBlack)
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 Row(
@@ -988,6 +1006,30 @@ fun HomeScreen(
             }
         )
     }
+
+    // Dialog 6: Preferences & Settings (Theme, Slide Orientation, Smoothness, Shuffle)
+    if (showSettingsDialog) {
+        SettingsDialog(
+            currentTheme = prefs.getThemeMode(),
+            currentSlideOrientation = prefs.getSlideOrientation(),
+            currentSmoothnessMs = prefs.getSmoothnessMs(),
+            currentShuffleEnabled = prefs.isShuffleEnabled(),
+            onThemeChanged = { newTheme ->
+                prefs.setThemeMode(newTheme)
+                onThemeChanged(newTheme)
+            },
+            onSlideOrientationChanged = { newOrientation ->
+                prefs.setSlideOrientation(newOrientation)
+            },
+            onSmoothnessChanged = { newMs ->
+                prefs.setSmoothnessMs(newMs)
+            },
+            onShuffleChanged = { newShuffle ->
+                prefs.setShuffleEnabled(newShuffle)
+            },
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
 }
 
 @Composable
@@ -1003,7 +1045,7 @@ fun TelemetryCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("telemetry_card"),
-        colors = CardDefaults.cardColors(containerColor = GunmetalSurface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(16.dp),
         border = CardDefaults.outlinedCardBorder().copy(brush = Brush.linearGradient(listOf(TitaniumBorder, SteelBlueAccent.copy(alpha = 0.4f))))
     ) {
@@ -1027,7 +1069,7 @@ fun TelemetryCard(
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold
                         ),
-                        color = ChromeWhite
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
@@ -1062,7 +1104,7 @@ fun TelemetryCard(
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         ),
-                        color = ChromeWhite
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
@@ -1297,7 +1339,7 @@ fun PlaylistGridCard(
             .fillMaxWidth()
             .height(115.dp)
             .testTag("playlist_card_${playlist.tagNumber}"),
-        colors = CardDefaults.cardColors(containerColor = GunmetalSurface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(14.dp),
         border = CardDefaults.outlinedCardBorder().copy(brush = Brush.linearGradient(listOf(TitaniumBorder, tagColor.copy(alpha = 0.35f))))
     ) {
@@ -1347,7 +1389,7 @@ fun PlaylistGridCard(
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp
                 ),
-                color = ChromeWhite
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -1363,7 +1405,7 @@ fun DeletedBinCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("deleted_bin_card"),
-        colors = CardDefaults.cardColors(containerColor = GunmetalSurface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(14.dp),
         border = CardDefaults.outlinedCardBorder().copy(brush = Brush.linearGradient(listOf(TitaniumBorder, CrimsonTrash.copy(alpha = 0.4f))))
     ) {
@@ -1393,7 +1435,7 @@ fun DeletedBinCard(
                     Text(
                         text = "Deleted",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = ChromeWhite
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "Recycle bin (can be restored)",

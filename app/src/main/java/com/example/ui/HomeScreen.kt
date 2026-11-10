@@ -371,6 +371,7 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // Button 1: Import Whole Folder
                     Button(
                         onClick = { folderPickerLauncher.launch(null) },
                         modifier = Modifier
@@ -388,31 +389,41 @@ fun HomeScreen(
                             contentDescription = "Folder",
                             modifier = Modifier.size(20.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Load Folder",
+                            text = "Whole Folder",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                            fontSize = 13.sp,
+                            maxLines = 1
                         )
                     }
 
-                    OutlinedButton(
+                    // Button 2: Select Specific Photos
+                    Button(
                         onClick = { filePickerLauncher.launch(arrayOf("image/*")) },
                         modifier = Modifier
+                            .weight(1f)
                             .height(52.dp)
-                            .testTag("pick_images_button"),
-                        colors = ButtonDefaults.outlinedButtonColors(
+                            .testTag("pick_photos_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GunmetalSurface,
                             contentColor = ChromeWhite
                         ),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(
-                            brush = Brush.linearGradient(listOf(TitaniumBorder, SteelBlueAccent))
-                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SteelBlueAccent.copy(alpha = 0.5f)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Image,
-                            contentDescription = "Pick Files",
-                            modifier = Modifier.size(18.dp)
+                            imageVector = Icons.Default.Collections,
+                            contentDescription = "Pick Photos",
+                            tint = SteelBlueAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Select Photos",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            maxLines = 1
                         )
                     }
                 }

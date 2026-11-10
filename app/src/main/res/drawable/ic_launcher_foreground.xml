@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_launcher_mountains"
+        android:drawable="@drawable/ic_metallic_mountains_1794299978374"
         android:gravity="center" />
 </layer-list>

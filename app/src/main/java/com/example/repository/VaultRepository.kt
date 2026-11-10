@@ -110,12 +110,14 @@ class VaultRepository(private val context: Context) {
         dao.restoreImage(id)
     }
 
-    suspend fun toggleTag(imageId: String, playlistId: Long) {
+    suspend fun toggleTag(imageId: String, playlistId: Long): Boolean {
         val currentTags = dao.getTagIdsForImageSync(imageId)
-        if (currentTags.contains(playlistId)) {
+        return if (currentTags.contains(playlistId)) {
             dao.removeTag(imageId, playlistId)
+            false
         } else {
             dao.addTag(ImagePlaylistCrossRef(imageId, playlistId))
+            true
         }
     }
 

@@ -91,6 +91,7 @@ import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.MutedSlate
 import com.example.ui.theme.ObsidianBlack
 import com.example.ui.theme.SteelBlueAccent
+import com.example.viewmodel.SlideDirection
 import com.example.viewmodel.ViewerViewModel
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
@@ -228,28 +229,28 @@ fun ImageViewerScreen(
                                     if (hasMoved && (absX > minSwipe || absY > minSwipe)) {
                                         change.consume()
                                         if (absY >= absX) {
-                                            // Vertical Swipe
+                                            // Vertical Swipe (TikTok style)
                                             if (totalY < -minSwipe) {
-                                                // Geser ke ATAS = PREV
-                                                viewModel.goToPrev()
+                                                // Geser ke ATAS = NEXT, muncul dr BAWAH
+                                                viewModel.goToNext(SlideDirection.FROM_BOTTOM)
                                             } else {
-                                                // Geser ke BAWAH = NEXT
-                                                viewModel.goToNext()
+                                                // Geser ke BAWAH = PREV, muncul dr ATAS
+                                                viewModel.goToPrev(SlideDirection.FROM_TOP)
                                             }
                                         } else {
                                             // Horizontal Swipe
                                             if (totalX < -minSwipe) {
-                                                // Geser ke KIRI = PREV
-                                                viewModel.goToPrev()
+                                                // Geser ke KIRI = NEXT, muncul dr KANAN
+                                                viewModel.goToNext(SlideDirection.FROM_RIGHT)
                                             } else {
-                                                // Geser ke KANAN = NEXT
-                                                viewModel.goToNext()
+                                                // Geser ke KANAN = PREV, muncul dr KIRI
+                                                viewModel.goToPrev(SlideDirection.FROM_LEFT)
                                             }
                                         }
                                     } else {
-                                        // Tap anywhere (outside top icons & playlist) -> NEXT
+                                        // Sentuh biasa = NEXT dengan img dr BAWAH
                                         change.consume()
-                                        viewModel.goToNext()
+                                        viewModel.goToNext(SlideDirection.FROM_BOTTOM)
                                     }
                                     break
                                 } else {
@@ -265,11 +266,9 @@ fun ImageViewerScreen(
                     }
             ) {
                 val currentIndex = uiState.currentIndex
-                val isNext = uiState.isNext
-                val isVertical = uiState.slideOrientation == "VERTICAL"
                 val smoothness = uiState.smoothnessMs
 
-                // AnimatedContent with configurable duration & zero-bounce FastOutSlowInEasing
+                // AnimatedContent with zero-bounce FastOutSlowInEasing & exact physical directional slide
                 AnimatedContent(
                     targetState = currentIndex,
                     transitionSpec = {
@@ -277,23 +276,24 @@ fun ImageViewerScreen(
                         val spec = tween<IntOffset>(durationMillis = duration, easing = FastOutSlowInEasing)
                         val fadeSpec = tween<Float>(durationMillis = duration / 2)
 
-                        if (isVertical) {
-                            if (isNext) {
-                                // Next: enters from bottom, exits to top
+                        when (uiState.slideDirection) {
+                            SlideDirection.FROM_BOTTOM -> {
+                                // Enters from bottom, exits to top
                                 (slideInVertically(animationSpec = spec) { it } + fadeIn(fadeSpec))
                                     .togetherWith(slideOutVertically(animationSpec = spec) { -it } + fadeOut(fadeSpec))
-                            } else {
-                                // Prev: enters from top, exits to bottom
+                            }
+                            SlideDirection.FROM_TOP -> {
+                                // Enters from top, exits to bottom
                                 (slideInVertically(animationSpec = spec) { -it } + fadeIn(fadeSpec))
                                     .togetherWith(slideOutVertically(animationSpec = spec) { it } + fadeOut(fadeSpec))
                             }
-                        } else {
-                            if (isNext) {
-                                // Next: enters from right, exits to left
+                            SlideDirection.FROM_RIGHT -> {
+                                // Enters from right, exits to left
                                 (slideInHorizontally(animationSpec = spec) { it } + fadeIn(fadeSpec))
                                     .togetherWith(slideOutHorizontally(animationSpec = spec) { -it } + fadeOut(fadeSpec))
-                            } else {
-                                // Prev: enters from left, exits to right
+                            }
+                            SlideDirection.FROM_LEFT -> {
+                                // Enters from left, exits to right
                                 (slideInHorizontally(animationSpec = spec) { -it } + fadeIn(fadeSpec))
                                     .togetherWith(slideOutHorizontally(animationSpec = spec) { it } + fadeOut(fadeSpec))
                             }

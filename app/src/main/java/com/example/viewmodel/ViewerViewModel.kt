@@ -20,9 +20,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+enum class SlideDirection {
+    FROM_BOTTOM, // Next (swipe up or tap) -> comes from bottom, exits to top
+    FROM_TOP,    // Prev (swipe down) -> comes from top, exits to bottom
+    FROM_RIGHT,  // Next (swipe left) -> comes from right, exits to left
+    FROM_LEFT    // Prev (swipe right) -> comes from left, exits to right
+}
+
 data class ViewerUiState(
     val images: List<ImageEntity> = emptyList(),
     val currentIndex: Int = 0,
+    val slideDirection: SlideDirection = SlideDirection.FROM_BOTTOM,
     val isNext: Boolean = true,
     val slideOrientation: String = "VERTICAL", // "VERTICAL" or "HORIZONTAL"
     val smoothnessMs: Int = 400,
@@ -97,39 +105,72 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
                 else -> repository.activeImages
             }
 
+            var isFirstLoad = true
             flow.collect { rawList ->
-                // Apply randomized order if shuffle is enabled (default TRUE per user request)
-                val processedList = if (shuffle) {
-                    if (initialImageId != null) {
-                        val selected = rawList.find { it.id == initialImageId }
-                        val others = rawList.filterNot { it.id == initialImageId }.shuffled()
-                        if (selected != null) listOf(selected) + others else rawList.shuffled()
+                if (isFirstLoad) {
+                    isFirstLoad = false
+                    // Apply randomized order if shuffle is enabled (default TRUE per user request)
+                    val processedList = if (shuffle) {
+                        if (initialImageId != null) {
+                            val selected = rawList.find { it.id == initialImageId }
+                            val others = rawList.filterNot { it.id == initialImageId }.shuffled()
+                            if (selected != null) listOf(selected) + others else rawList.shuffled()
+                        } else {
+                            rawList.shuffled()
+                        }
                     } else {
-                        rawList.shuffled()
+                        rawList
+                    }
+
+                    val targetIndex = if (initialImageId != null) {
+                        val found = processedList.indexOfFirst { it.id == initialImageId }
+                        if (found >= 0) found else 0
+                    } else {
+                        0
+                    }
+
+                    _uiState.update {
+                        it.copy(
+                            images = processedList,
+                            currentIndex = targetIndex
+                        )
+                    }
+
+                    if (processedList.isNotEmpty()) {
+                        onPageChanged(targetIndex)
+                    } else {
+                        _uiState.update { it.copy(currentBitmap = null) }
                     }
                 } else {
-                    rawList
-                }
+                    // Subsequent emissions from database (tagging, untagging, trash toggle):
+                    // CRITICAL: NEVER re-shuffle or reset currentIndex to 0! Keep the current image visible!
+                    val currentImages = _uiState.value.images
+                    val currentIdx = _uiState.value.currentIndex
+                    val currentImageId = currentImages.getOrNull(currentIdx)?.id
 
-                val targetIndex = if (initialImageId != null) {
-                    val found = processedList.indexOfFirst { it.id == initialImageId }
-                    if (found >= 0) found else 0
-                } else {
-                    val curr = _uiState.value.currentIndex
-                    if (curr in processedList.indices) curr else 0
-                }
+                    // Keep items in the exact same randomized order, only removing any hard-deleted items
+                    val rawIds = rawList.map { it.id }.toSet()
+                    val updatedList = currentImages.filter { it.id in rawIds }
 
-                _uiState.update {
-                    it.copy(
-                        images = processedList,
-                        currentIndex = targetIndex
-                    )
-                }
+                    val newIdx = if (currentImageId != null) {
+                        val found = updatedList.indexOfFirst { it.id == currentImageId }
+                        if (found >= 0) found else (currentIdx.coerceAtMost(updatedList.size - 1)).coerceAtLeast(0)
+                    } else {
+                        0
+                    }
 
-                if (processedList.isNotEmpty()) {
-                    onPageChanged(targetIndex)
-                } else {
-                    _uiState.update { it.copy(currentBitmap = null) }
+                    _uiState.update {
+                        it.copy(
+                            images = updatedList,
+                            currentIndex = newIdx
+                        )
+                    }
+
+                    if (updatedList.isNotEmpty() && newIdx in updatedList.indices) {
+                        val currImg = updatedList[newIdx]
+                        val tags = repository.getTagIdsForImageSync(currImg.id).toSet()
+                        _uiState.update { it.copy(activeTagIds = tags) }
+                    }
                 }
             }
         }
@@ -176,19 +217,19 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun goToNext() {
+    fun goToNext(direction: SlideDirection = SlideDirection.FROM_BOTTOM) {
         val list = _uiState.value.images
         if (list.isEmpty()) return
         val nextIdx = (_uiState.value.currentIndex + 1) % list.size
-        _uiState.update { it.copy(isNext = true) }
+        _uiState.update { it.copy(isNext = true, slideDirection = direction) }
         onPageChanged(nextIdx)
     }
 
-    fun goToPrev() {
+    fun goToPrev(direction: SlideDirection = SlideDirection.FROM_TOP) {
         val list = _uiState.value.images
         if (list.isEmpty()) return
         val prevIdx = if (_uiState.value.currentIndex - 1 < 0) list.size - 1 else _uiState.value.currentIndex - 1
-        _uiState.update { it.copy(isNext = false) }
+        _uiState.update { it.copy(isNext = false, slideDirection = direction) }
         onPageChanged(prevIdx)
     }
 
@@ -250,9 +291,16 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         val currentImage = list[idx]
 
         viewModelScope.launch {
-            repository.toggleTag(currentImage.id, playlistId)
+            val added = repository.toggleTag(currentImage.id, playlistId)
             val updatedTags = repository.getTagIdsForImageSync(currentImage.id).toSet()
             _uiState.update { it.copy(activeTagIds = updatedTags) }
+            val playlist = allPlaylists.value.find { it.id == playlistId }
+            val num = playlist?.tagNumber ?: playlistId
+            if (added) {
+                _userMessage.emit("Added to Playlist $num")
+            } else {
+                _userMessage.emit("Removed from Playlist $num")
+            }
         }
     }
 
